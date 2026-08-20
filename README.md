@@ -57,7 +57,7 @@ $$U^{(k+1)} = (1 - \alpha)\, U^{(k)} + \alpha\, U_{\text{calculated}}^{(k)}$$
 This project requires two solver executables — **SCIP** (MILP) and **IPOPT** (NLP) — installed separately from the Python environment; Pyomo calls out to them as external binaries, they are not pip packages.
 
 ```bash
-git clone https://github.com/<your-username>/hens-opt.git
+git clone https://github.com/RamiMakarem/heat-exchanger-network-synthesis.git
 cd hens-opt
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
