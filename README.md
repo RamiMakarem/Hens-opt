@@ -2,7 +2,7 @@
 
 **An open-source, Pyomo-based optimization engine that automatically synthesizes cost-optimal heat exchanger networks for industrial process plants — from raw stream data to a fully-dimensioned, publication-grade network diagram.**
 
-[Pinch Analysis APP→](https://pinch-analysis-app.streamlit.app/)** &nbsp;|&nbsp; **[Formulations & Benchmarks Whitepaper →](FORMULATIONS_AND_BENCHMARKS.md)** &nbsp;|&nbsp; **[Architecture Evolution Log →](ARCHITECTURE_EVOLUTION.md)**
+[Pinch Analysis APP→](https://pinch-analysis-app.streamlit.app/) &nbsp;|&nbsp; **[Formulations & Benchmarks Whitepaper →](FORMULATIONS_AND_BENCHMARKS.md)** &nbsp;|&nbsp; **[Architecture Evolution Log →](ARCHITECTURE_EVOLUTION.md)**
 
 ---
 
