@@ -97,4 +97,4 @@ Load `examples/streams_2x2.csv` in the UI for a fast first run.
 
 Built solo over 9 months as a deep-dive into applying mathematical programming to process design — the kind of problem that sits at the intersection of chemical engineering, operations research, and software engineering. Open to opportunities in process systems engineering, optimization/OR, or applied ML-for-engineering roles.
 
-**[Your Name]** — [LinkedIn] · [Email] · [Portfolio]
+**[Rami Makarem]**
