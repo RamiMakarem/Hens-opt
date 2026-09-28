@@ -1,58 +1,87 @@
 # Architecture Evolution: Engineering Decision Log
 
-This document tracks the full evolution of the HENS-Opt solver architecture, including approaches that were tried and deliberately discarded. It's kept in the repo intentionally: the dead ends carry as much engineering signal as the current baseline, and the reasoning behind each pivot is more useful to a reader than a changelog of what "just worked."
+How the HENS-Opt solver architecture reached its current form, including approaches that were tried and deliberately discarded. The dead ends are kept because the reasoning behind each pivot is more informative than a changelog of what "just worked." Current-state math is in [FORMULATIONS_AND_BENCHMARKS.md](FORMULATIONS_AND_BENCHMARKS.md).
 
 ---
 
-## Phase 1 — Flattened 1D Compressed Vectors (Discarded)
+## Phase 1: Flattened 1D vectors with Taylor/tangent OA (discarded)
 
-**Approach:** Dynamic Outer Approximation using first-order Taylor series to map $(Q, \text{LMTD}) \to A$ and tangent lines to map $A \to \text{Cost}$. The full problem structure — coefficient matrices, RHS vectors, non-zero masks — was flattened into 1D compressed index vectors for solver interfacing via SciPy's optimization layer.
+**Approach.** Dynamic outer approximation with first-order Taylor series for $(Q,\text{LMTD}) \to A$ and tangent lines for $A \to \text{Cost}$, with the whole problem flattened into 1D compressed vectors for SciPy's optimization layer.
 
-**Why it was dropped:** Flattening the structure this early made the model effectively unreadable and unmaintainable — every change to the network topology required re-deriving index offsets by hand, and the tight coupling between the compression scheme and the math made debugging accuracy issues nearly impossible. The Taylor/tangent linearization itself was also too coarse, producing meaningful error against the true nonlinear surface. **Lesson:** premature low-level optimization of data structures before the mathematical formulation is validated is a trap — get the model right in a readable form first.
+**Why dropped.** The flattening made the model unreadable and hard to change (every topology change meant re-deriving index offsets), and the linearization was too coarse. **Lesson:** validate the mathematics in a readable form before optimizing data structures.
 
-## Phase 2 — Manual SOS2 Adjacency Logic (Discarded)
+## Phase 2: Manual SOS2 adjacency (discarded)
 
-**Approach:** Moved to piecewise-linear Special Ordered Sets (SOS2) for the nonlinear mappings, but the solver setup in use at the time had no native SOS2 support, so adjacency constraints (which pairs of breakpoints can be simultaneously active) were encoded manually with binary variables. Also evaluated Julia/JuMP as an alternative modeling layer.
+**Approach.** Piecewise-linear SOS2 with adjacency encoded by hand using binaries, since the solver setup then in use lacked native SOS2. Julia/JuMP was also evaluated.
 
-**Why it was dropped:** Manually-coded adjacency logic is a well-known way to blow up MIP gaps — without a solver's native SOS2 branching heuristics, the relaxation is much weaker than it needs to be, and combined with inline dynamic OA re-solve loops, latency became unworkable even on small test cases. Julia/JuMP was set aside not for technical reasons but for maintainability: keeping one language across the optimization core and the Streamlit UI was judged more valuable than JuMP's cleaner native SOS2 syntax. **Lesson:** don't hand-roll what a solver already does better — find the solver that has it natively instead.
+**Why dropped.** Hand-coded adjacency gives a weak relaxation and, combined with inline OA re-solves, was too slow even on small cases. JuMP was set aside for maintainability (one language for solver core and UI), not technical reasons. **Lesson:** use a solver's native structures instead of hand-rolling them.
 
-## Phase 3 — Pyomo + SCIP, 6× SOS2 Formulation (Discarded as production baseline)
+## Phase 3: Pyomo + SCIP with 6× SOS2 per match (superseded)
 
-**Approach:** Standardized on Pyomo as the modeling layer and SCIP as the open-source solver with native SOS2 support. Each process-to-process stream match was modeled with six separate 1D SOS2 transformations (driving forces, their log-differences, duty, and area-to-cost — full derivation in [FORMULATIONS_AND_BENCHMARKS.md](FORMULATIONS_AND_BENCHMARKS.md)).
+**Approach.** Pyomo with SCIP's native SOS2. Each match used six 1D SOS2 transformations: $\Delta T_1$, $\Delta T_2$, their difference, the difference of their logs, $Q$, and area to cost.
 
-**Why it was reduced:** This formulation is mathematically correct and was a real step forward in tooling (native SOS2, single language, no more manual adjacency), but six SOS2 sets per match means six sets of binary breakpoint-selection variables per match — for any network with more than a handful of streams, the binary count and resulting branch-and-bound tree size grew fast enough to dominate solve time. This is what motivated the utility-match-specific reduction in Phase 4.
+**Why superseded.** Correct, but six sets of breakpoint binaries per match made branch-and-bound grow too fast beyond small networks.
 
-## Phase 4 — Utility Match Simplification (Adopted)
+## Phase 4: Utility match simplification (adopted)
 
-**Insight:** Utility exchangers only ever occur at the terminal end of a stream's temperature path, where three of the four temperatures defining the driving forces are already fixed by problem data (utility supply/return temperature, and the stream's target temperature). Only one driving force is actually a free variable.
+**Insight.** Utility exchangers occur only at a stream's terminal end, so three of the four temperatures are fixed by problem data and only one driving force is free. That free $\Delta T$ is an explicit function of duty, so the whole chain collapses to a single 1D SOS2 map $Q \to \text{Cost}$ per utility assignment, about a 6× reduction in binaries for utility matches. Still in use.
 
-**Evolution:** First collapsed utility matches from 6 SOS2 sets to 3. Then recognized that the single remaining free $\Delta T$ can itself be written directly as a function of duty $Q$, flow-heat-capacity $CP$, and the fixed temperatures — eliminating the need to model it as a separate variable at all. Final result: **a single 1D SOS2 mapping, $Q \to \text{Cost}$, per utility match.** This is retained in the current architecture and is a ~6x reduction in binary overhead specifically for utility matches, which are present in every feasible network.
+## Phase 5: Native 2D SOS2 (discarded)
 
-## Phase 5 — Full 2D SOS2 (Discarded)
+**Approach.** Full 2D SOS2 grids for $(\Delta T_1,\Delta T_2)\to\text{LMTD}$ and $(\text{LMTD},Q)\to A$.
 
-**Approach:** Attempted the mathematically "cleanest" formulation — full 2D SOS2 grids for $(\Delta T_1, \Delta T_2) \to \text{LMTD}$ and $(\text{LMTD}, Q) \to A$ directly, avoiding the log-space transformations altogether.
+**Why dropped.** SCIP has no specialized branching for triangulated 2D piecewise-linear structures, so this degraded to brute-force branching and even small cases stalled. **Lesson:** choose formulations together with solver capability, not in the abstract.
 
-**Why it was dropped:** SCIP does not implement the specialized branching rules that commercial solvers (Gurobi, CPLEX) use for native 2D SOS2 structures — without them, 2D SOS2 in an open-source solver essentially degrades to brute-force branching on a much larger binary space, and even small test networks stalled. **Lesson:** the "textbook" formulation isn't automatically the right one for the actual solver being used — formulation choice has to be made jointly with solver capability, not in the abstract. This finding is what directly motivated the current four-formulation benchmark in [FORMULATIONS_AND_BENCHMARKS.md](FORMULATIONS_AND_BENCHMARKS.md), all of which are explicitly designed to avoid native 2D SOS2.
+## Phase 6: Pre-solve hyperplanes in log space (adopted, later replaced)
 
-## Phase 6 — Pre-Solve Dynamic Tangent Hyperplanes (Current Baseline)
+**Insight.** The recurring cost in earlier phases was linearizing *dynamically*, with repeated re-solves. Instead, an automated pre-solve step samples the driving-force domain (uniform grid plus random points), adds tangent hyperplanes where error is largest until it drops below tolerance, and hands SCIP one static model.
 
-**Insight:** The recurring bottleneck across Phases 1–5 wasn't the linearization concept itself, it was doing the linearization *dynamically*, inline with the solver, via repeated callback-triggered re-solves (classical Outer Approximation). Every dynamic OA loop paid a latency tax per iteration.
+At this stage the model bounded $-\beta\ln(\text{LMTD})$ with hyperplanes, then exponentiated through more piecewise structure.
 
-**Mechanism:** Move all linearization work to before the MILP solver is ever invoked. An automated pre-solve engine samples the driving-force domain with a combined uniform-and-random grid, evaluates tangent hyperplanes at each sample, measures approximation error against the true nonlinear surface, and keeps adding hyperplanes at the highest-error regions until error drops below tolerance. The result is a static, fully-linearized model handed to SCIP once — no callbacks, no iterative re-solving.
+**Why replaced.** Exponentiating a small absolute envelope gap produced large *relative* cost errors, and because the objective minimizes cost, the optimizer steered toward exactly where the envelope was loosest. Reported MILP costs sat far below the true cost of the same network. An outer-approximation refinement loop (adding a tangent cut at each incumbent's own $(\Delta T_1,\Delta T_2)$ and re-solving) was built to close this gap, then retired with the formulation it was written for.
 
-This is the current production baseline and the foundation for the four candidate formulations under active benchmark (A–D in [FORMULATIONS_AND_BENCHMARKS.md](FORMULATIONS_AND_BENCHMARKS.md)), which vary in how the *post*-hyperplane structure (LMTD → duty → cost) is linearized, not in the hyperplane pre-solve mechanism itself.
+## Phase 7: Multiplicative kernel $b\,G\,H$ with McCormick (adopted, current production)
+
+**Approach.** Rewrite cost as $b\,G\,H$ with $G=Q^\beta$ and $H=(U\,\text{LMTD})^{-\beta}$. $H$ is convex, so tangent planes are valid underestimators. $G$ uses a 1D SOS2 interpolation, and $P = G\,H$ is a $z$-scaled McCormick product. Cost is then linear in $P$ for every $\beta$, which removes the separate area variable and the area-to-cost SOS2 stage.
+
+**Why.** This works in the original (not log) space, so there is no exponentiation blow-up, and it needs far fewer binaries than the 6× SOS2 scheme.
+
+**Known trade-off.** The McCormick envelope leaves internal linearization error, so the MILP's own objective is a poor predictor of the true cost of the network it selects. The NLP re-evaluation (Phase 8) absorbs this, and this formulation currently gives the best final networks.
+
+**Why not just hyperplane the cost surface too?** A dual-hyperplane scheme (hyperplanes for LMTD, then for $\text{Cost}(Q,L)$) would be the cheapest to solve, but $\text{Cost}(Q,L) = b\,(Q/(UL))^{c}$ is not convex. Its Hessian has
+
+$$f_{QQ} = bc(c-1)U^{-c}Q^{c-2}L^{-c}, \quad f_{LL} = bc(c+1)U^{-c}Q^{c}L^{-c-2}, \quad f_{QL} = -bc^2U^{-c}Q^{c-1}L^{-c-1},$$
+
+so
+
+$$\det \nabla^2 f = f_{QQ}f_{LL} - f_{QL}^2 = -\,b^2c^2\,U^{-2c}\,Q^{2c-2}\,L^{-2c-2} \;<\; 0$$
+
+for every $c \neq 0$. A negative determinant means the Hessian is indefinite everywhere, so tangent planes are not valid underestimators and can cut off feasible or optimal solutions.
+
+## Phase 8: Solution pool + fixed-topology NLP re-ranking (adopted, current)
+
+**Insight.** Even with a tighter MILP, its objective is inexact, so the MILP-optimal topology is not reliably the true-TAC-best. Rather than trust one answer or re-solve N times with no-good cuts, HENS-Opt collects a **pool of distinct feasible topologies from a single SCIP run**, refines each in an IPOPT NLP (warm-started from error-free values), and picks the lowest true TAC.
+
+## Phase 9: 2D DLOG and SOS2 → DLOG for HiGHS (in progress)
+
+**Goal.** Replace the McCormick product and the 1D SOS2 on $G$ with a single 2D disaggregated-logarithmic triangulated interpolation over $(G,H)$, using Gray-coded cell selection (logarithmic in grid size) plus one triangle bit. That removes the McCormick relaxation error. Converting the remaining SOS2 sets (utility cost curves) to DLOG as well removes the need for native SOS2, which is the prerequisite for moving from SCIP to HiGHS.
+
+**Status.** Implemented and under evaluation. It is not yet the production formulation because the McCormick version currently produces better final networks on the benchmark; the DLOG version is being tuned toward MILP convergence. Also in progress: a shell-and-tube sizing module whose results would feed refined heat-transfer coefficients back into the optimizer.
 
 ---
 
-## Summary timeline
+## Summary
 
 | Phase | Core idea | Outcome |
 |---|---|---|
-| 1 | Flattened vectors + Taylor/tangent OA | Discarded — unmaintainable, inaccurate |
-| 2 | Manual SOS2 adjacency + Julia evaluation | Discarded — weak relaxation, latency |
-| 3 | Pyomo + SCIP native SOS2 (6×/match) | Superseded — correct but binary-heavy |
-| 4 | Utility match reduction (6× → 1×) | **Adopted** |
-| 5 | Full native 2D SOS2 | Discarded — SCIP branching gap |
-| 6 | Pre-solve dynamic hyperplanes | **Adopted, current baseline** |
+| 1 | Flattened vectors + Taylor/tangent OA | Discarded: unmaintainable, inaccurate |
+| 2 | Manual SOS2 adjacency + Julia evaluation | Discarded: weak relaxation, latency |
+| 3 | Pyomo + SCIP native SOS2 (6× per match) | Superseded: binary-heavy |
+| 4 | Utility reduction (6× → 1×) | **Adopted** |
+| 5 | Native 2D SOS2 | Discarded: no SCIP branching support |
+| 6 | Pre-solve log-space hyperplanes (+ OA loop) | Replaced: relative-error blow-up |
+| 7 | $b\,G\,H$ kernel: H planes + 1D SOS2 + McCormick | **Adopted (current production)** |
+| 8 | Solution pool → NLP re-ranking | **Adopted (current)** |
+| 9 | 2D DLOG, SOS2 → DLOG, HiGHS | In progress |
 
-The throughline across all six phases: every pivot was driven by measured performance or maintainability failure, not by starting over for its own sake. The current architecture is the accumulated result of ruling out five other approaches with specific, documented reasons — not the first thing that was tried.
+Every pivot was driven by measured performance, accuracy, or maintainability failure rather than starting over for its own sake.
