@@ -34,11 +34,11 @@ Details, equations and known limitations are in [FORMULATIONS_AND_BENCHMARKS.md]
 
 ## Benchmark: Linnhoff & Ahmad (1990) 9-stream problem (5 hot, 4 cold)
 
-| Source | TAC | MILP Relaxation Gap | Solving time |
-|---|---|---|---|---|---|
-| Huber (doctoral thesis, Multi-objective heat exchanger network synthesis: simultaneous optimization of heat integration and procces design, TU wein, 2024) | 2.8526 × 10⁶ | 0% | 590s |
-| Wu, Xu, Hu, Wang, Liang & Du (ACS Omega 2021, 6, 29459−29470) | 2.928 × 10⁶ | 0% | Not Specified |
-| **HENS-Opt (this work)** | 2.711 × 10⁶ | MILP relaxation gap 7.6% (not converged) | 500s (limited by user) |
+| Source | TAC | MILP Relaxation Gap | Solving Time |
+| :--- | :--- | :--- | :--- |
+| Huber (doctoral thesis, *Multi-objective heat exchanger network synthesis: simultaneous optimization of heat integration and process design*, TU Wien, 2024) | 2.8526 × 10⁶ | 0% | 590s |
+| Wu, Xu, Hu, Wang, Liang & Du (*ACS Omega* 2021, 6, 29459–29470) | 2.928 × 10⁶ | 0% | Not Specified |
+| **HENS-Opt (this work)** | 2.711 × 10⁶ | 7.6% (not converged) | 500s (limited by user) |
 
 Notes for reading this table:
 - **The MILP had not converged at the time limit.** The reported TAC is the NLP-refined value of the best topology found, not a proven optimum. Longer runs or a tighter formulation (see below) may improve it.
